@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Luminos
+GenericName=Film Negative Converter
+Comment=Analog-Filmnegative (RAW/TIFF) in hochwertige Positive umwandeln
+Exec=luminos %F
+Icon=luminos
+Terminal=false
+StartupNotify=true
+StartupWMClass=Luminos
+Categories=Graphics;Photography;RasterGraphics;
+MimeType=image/tiff;
+Keywords=film;negativ;analog;dunkelkammer;scan;RAW;konvertieren;

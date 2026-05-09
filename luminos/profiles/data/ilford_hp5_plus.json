@@ -1,0 +1,12 @@
+{
+  "name": "Ilford HP5 Plus",
+  "type": "bw_negative",
+  "white_balance": [1.0, 1.0, 1.0],
+  "tone_curve": [
+    [0.0, 0.0],
+    [0.3, 0.31],
+    [0.5, 0.52],
+    [0.7, 0.74],
+    [1.0, 1.0]
+  ]
+}

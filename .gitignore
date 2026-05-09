@@ -1,0 +1,44 @@
+# ── AI tools ─────────────────────────────────────────────────────────────────
+CLAUDE.md
+.claude/
+.cursor/
+.aider*
+.copilot/
+.github/copilot*
+.windsurf/
+.continue/
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+.eggs/
+.venv/
+venv/
+env/
+pip-wheel-metadata/
+
+# ── Build / packaging ─────────────────────────────────────────────────────────
+build/
+dist/
+*.AppImage
+appimagetool.AppImage
+luminos.spec
+
+# ── Editor / IDE ──────────────────────────────────────────────────────────────
+*.code-workspace
+.vscode/
+.idea/
+*.swp
+*~
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+=*
+*.log

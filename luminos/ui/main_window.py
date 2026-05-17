@@ -60,13 +60,7 @@ from luminos.ui.session import (
     _save_app_settings,
     SessionManager,
 )
-from luminos.ui.workers import (
-    _ImportWorker,
-    _FullImageLoader,
-    _ExportWorker,
-    _BatchExportWorker,
-    ProcessingParams,
-)
+from luminos.ui.workers import _BatchExportWorker, _ExportWorker, _ImportWorker, _FullImageLoader
 from luminos.ui.histogram import _HistogramWidget
 from luminos.ui.curve_widget import _CurveWidget, _CURVE_CHANNELS, _CURVE_CH_LABELS
 from luminos.ui.widgets import (
@@ -79,9 +73,9 @@ from luminos.ui.widgets import (
     _CropOverlay,
     _NavigatorWidget,
 )
-from luminos.ui.dialogs import _BatchExportDialog, _PreferencesDialog
+from luminos.ui.dialogs import _PreferencesDialog
 from luminos.ui.comparison import _ComparisonController
-from luminos.ui.export_params import processing_params_from_settings
+from luminos.ui.export_controller import _ExportController
 from luminos.ui.history import _EditHistory
 from luminos.ui.image_utils import array_to_pixmap, rotate_uint8
 from luminos.ui.navigator_controller import _NavigatorController
@@ -93,12 +87,6 @@ _IMPORT_FILTER = (
 _IMPORT_EXTENSIONS = frozenset({
     '.tif', '.tiff', '.nef', '.cr2', '.cr3', '.arw', '.dng', '.orf', '.raf', '.rw2'
 })
-_EXPORT_FILTERS = (
-    "TIFF 16-bit (*.tif *.tiff);;"
-    "PNG 8-bit (*.png);;"
-    "JPEG 8-bit (*.jpg *.jpeg)"
-)
-
 _ZOOM_STEPS = [10, 15, 25, 33, 50, 67, 75, 100, 125, 150, 200, 300, 400]
 
 
@@ -195,6 +183,7 @@ class MainWindow(QMainWindow):
         root.addWidget(self._build_controls())
         self._setup_slider_defs()
         self._navigator_controller = _NavigatorController(self._navigator, self._scroll)
+        self._export_controller = _ExportController(self)
 
         # ── Crop overlay (child of viewport, covers it entirely) ──────────
         self._crop_overlay = _CropOverlay(self._scroll.viewport())
@@ -2581,185 +2570,27 @@ class MainWindow(QMainWindow):
     # ── Single-image export ───────────────────────────────────────────────────
 
     def _export_image(self) -> None:
-        if self._raw_image is None:
-            return
-
-        path, selected_filter = QFileDialog.getSaveFileName(
-            self, "Export Image", "", _EXPORT_FILTERS
-        )
-        if not path:
-            return
-
-        if "." not in Path(path).name:
-            if "TIFF" in selected_filter:
-                path += ".tif"
-            elif "PNG" in selected_filter:
-                path += ".png"
-            else:
-                path += ".jpg"
-
-        self._status.showMessage(f"Exporting {Path(path).name}…")
-        self._set_export_enabled(False)
-        self._set_batch_enabled(False)
-
-        entry = self._entries.get(self._active_path)
-        crop = entry.crop_region_norm if entry is not None else None
-        rot  = entry.rotation_steps   if entry is not None else 0
-        film_type = entry.film_type   if entry is not None else "c41"
-        params = ProcessingParams(
-            exposure_stops=self._exposure(),
-            white_balance=self._white_balance(),
-            mask=self._orange_mask,
-            black_point=self._black_point(),
-            white_point=self._white_point(),
-            saturation=self._saturation(),
-            curve_luts=self._curve_widget.luts,
-            sharpening=self._sharpening(),
-            angle=self._angle(),
-            contrast=self._contrast(),
-            highlights=self._highlights(),
-            shadows=self._shadows(),
-            vibrance=self._vibrance(),
-            noise_reduction=self._noise_reduction(),
-            vignette=self._vignette(),
-            grain=self._grain(),
-            film_type=film_type,
-            split_toning=self._split_toning_params(),
-            exif_bytes=entry.exif_bytes if entry is not None else None,
-        )
-        worker = _ExportWorker(
-            raw=self._raw_image,
-            path=path,
-            params=params,
-            crop_region_norm=crop,
-            rotation_steps=rot,
-        )
-        worker.finished.connect(self._on_export_finished)
-        worker.error.connect(self._on_export_error)
-        self._export_worker = worker
-        worker.start()
+        self._export_controller.export_image()
 
     def _on_export_finished(self, path: str) -> None:
-        self._set_export_enabled(True)
-        self._set_batch_enabled(self._filmstrip.count() > 0)
-        self._status.showMessage(f"Saved: {path}")
+        self._export_controller.on_export_finished(path)
 
     def _on_export_error(self, msg: str) -> None:
-        self._set_export_enabled(True)
-        self._set_batch_enabled(self._filmstrip.count() > 0)
-        self._status.showMessage(f"Export error: {msg}")
+        self._export_controller.on_export_error(msg)
 
     # ── Batch export ──────────────────────────────────────────────────────────
 
     def _batch_export(self) -> None:
-        selected = self._filmstrip.selectedItems()
-        if not selected:
-            self._status.showMessage("Keine Bilder im Filmstreifen ausgewählt.")
-            return
-        if self._active_path in self._entries:
-            self._entries[self._active_path].settings = self._read_settings()
-
-        s = self._app_settings
-        dlg = _BatchExportDialog(
-            self,
-            default_fmt=s.default_export_format,
-            default_quality=s.default_jpeg_quality,
-            default_output_dir=s.default_output_dir,
-        )
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        paths = [item.data(Qt.ItemDataRole.UserRole) for item in selected]
-        masks = {
-            p: self._entries[p].orange_mask
-            for p in paths
-            if p in self._entries and self._entries[p].orange_mask is not None
-        }
-        crops = {
-            p: self._entries[p].crop_region_norm
-            for p in paths
-            if p in self._entries and self._entries[p].crop_region_norm is not None
-        }
-
-        self._set_batch_enabled(False)
-        self._set_export_enabled(False)
-        self._status.showMessage(
-            f"Batch export: 0 / {len(paths)} — {Path(dlg.output_dir).name}/"
-        )
-
-        rotations = {
-            p: self._entries[p].rotation_steps
-            for p in paths
-            if p in self._entries
-        }
-        film_types = {
-            p: self._entries[p].film_type
-            for p in paths
-            if p in self._entries
-        }
-        exif_data = {
-            p: self._entries[p].exif_bytes
-            for p in paths
-            if p in self._entries
-        }
-        params_by_path = {
-            p: processing_params_from_settings(self._entries[p].settings, self._entries[p])
-            for p in paths
-            if p in self._entries
-        }
-        params = ProcessingParams(
-            exposure_stops=self._exposure(),
-            white_balance=self._white_balance(),
-            mask=None,
-            black_point=self._black_point(),
-            white_point=self._white_point(),
-            saturation=self._saturation(),
-            curve_luts=self._curve_widget.luts,
-            sharpening=self._sharpening(),
-            angle=self._angle(),
-            contrast=self._contrast(),
-            highlights=self._highlights(),
-            shadows=self._shadows(),
-            vibrance=self._vibrance(),
-            noise_reduction=self._noise_reduction(),
-            vignette=self._vignette(),
-            grain=self._grain(),
-            film_type="c41",
-            split_toning=self._split_toning_params(),
-        )
-        worker = _BatchExportWorker(
-            paths=paths,
-            output_dir=dlg.output_dir,
-            fmt=dlg.fmt,
-            quality=dlg.quality,
-            params=params,
-            params_by_path=params_by_path,
-            masks=masks,
-            crops=crops,
-            rotations=rotations,
-            film_types=film_types,
-            exif_data=exif_data,
-            suffix=self._app_settings.export_suffix,
-        )
-        worker.progress.connect(self._on_batch_progress)
-        worker.finished.connect(self._on_batch_finished)
-        worker.error.connect(self._on_batch_error)
-        self._batch_worker = worker
-        worker.start()
+        self._export_controller.batch_export()
 
     def _on_batch_progress(self, current: int, total: int, path: str) -> None:
-        self._status.showMessage(
-            f"Batch-Export: {current + 1} / {total} — {Path(path).name}"
-        )
+        self._export_controller.on_batch_progress(current, total, path)
 
     def _on_batch_finished(self, count: int) -> None:
-        self._set_batch_enabled(True)
-        self._set_export_enabled(self._raw_image is not None)
-        self._status.showMessage(f"Batch export complete: {count} file(s) saved.")
+        self._export_controller.on_batch_finished(count)
 
     def _on_batch_error(self, path: str, msg: str) -> None:
-        # Non-fatal: log to status and continue — worker proceeds with next image
-        self._status.showMessage(f"Batch error ({Path(path).name}): {msg}")
+        self._export_controller.on_batch_error(path, msg)
 
     # ── Hilfe ─────────────────────────────────────────────────────────────────
 

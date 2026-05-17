@@ -65,7 +65,7 @@ from luminos.core.color import (
     temp_tint_to_rgb_multipliers,
     rgb_multipliers_to_temp_tint,
 )
-from luminos.core.curves import apply_curves_fast, make_lut
+from luminos.core.curves import apply_curves_fast
 from luminos.io.export import save_tiff
 
 from luminos.ui.session import (
@@ -98,6 +98,7 @@ from luminos.ui.widgets import (
     _NavigatorWidget,
 )
 from luminos.ui.dialogs import _BatchExportDialog, _PreferencesDialog
+from luminos.ui.export_params import processing_params_from_settings
 
 _IMPORT_FILTER = (
     "Images (*.tif *.tiff *.nef *.cr2 *.cr3 *.arw *.dng *.orf *.raf *.rw2)"
@@ -1082,56 +1083,6 @@ class MainWindow(QMainWindow):
             float(self._st_hi_hue_slider.value()),
             hi_sat,
             self._st_balance_slider.value() / 100.0,
-        )
-
-    @staticmethod
-    def _split_toning_params_from_settings(
-        s: _EditSettings,
-    ) -> tuple[float, float, float, float, float] | None:
-        sh_sat = s.split_shadow_sat / 100.0
-        hi_sat = s.split_highlight_sat / 100.0
-        if sh_sat < 1e-4 and hi_sat < 1e-4:
-            return None
-        return (
-            float(s.split_shadow_hue),
-            sh_sat,
-            float(s.split_highlight_hue),
-            hi_sat,
-            s.split_balance / 100.0,
-        )
-
-    @staticmethod
-    def _curve_luts_from_settings(s: _EditSettings) -> dict[str, np.ndarray]:
-        return {
-            ch: make_lut(s.curve_points.get(ch, [(0.0, 0.0), (1.0, 1.0)]))
-            for ch in ("master", "r", "g", "b")
-        }
-
-    def _processing_params_from_settings(
-        self,
-        s: _EditSettings,
-        entry: _ImageEntry,
-    ) -> ProcessingParams:
-        return ProcessingParams(
-            exposure_stops=s.exposure / 10.0,
-            white_balance=temp_tint_to_rgb_multipliers(s.wb_temp, s.wb_tint),
-            mask=entry.orange_mask,
-            black_point=s.black_point / 100.0,
-            white_point=s.white_point / 100.0,
-            saturation=s.saturation / 100.0,
-            curve_luts=self._curve_luts_from_settings(s),
-            sharpening=s.sharpening / 100.0,
-            angle=s.angle / 10.0,
-            contrast=s.contrast / 100.0,
-            highlights=s.highlights / 100.0,
-            shadows=s.shadows / 100.0,
-            vibrance=s.vibrance / 100.0,
-            noise_reduction=s.noise_reduction / 100.0,
-            vignette=s.vignette / 100.0,
-            grain=s.grain / 100.0,
-            film_type=entry.film_type,
-            split_toning=self._split_toning_params_from_settings(s),
-            exif_bytes=entry.exif_bytes,
         )
 
     def _make_clipping_pixmap(self) -> QPixmap:
@@ -3007,7 +2958,7 @@ class MainWindow(QMainWindow):
             if p in self._entries
         }
         params_by_path = {
-            p: self._processing_params_from_settings(self._entries[p].settings, self._entries[p])
+            p: processing_params_from_settings(self._entries[p].settings, self._entries[p])
             for p in paths
             if p in self._entries
         }

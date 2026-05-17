@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
@@ -350,7 +350,6 @@ class _NavigatorWidget(QWidget):
 
     def paintEvent(self, _event) -> None:  # noqa: N802
         p = QPainter(self)
-        w, h = self.width(), self.height()
         p.fillRect(self.rect(), QColor(20, 20, 20))
 
         if self._pixmap is None or self._pixmap.isNull():

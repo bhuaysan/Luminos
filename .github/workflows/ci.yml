@@ -28,5 +28,8 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall luminos luminos_cli.py luminos_gui.py
 
+      - name: Lint
+        run: ruff check .
+
       - name: Run tests
         run: pytest

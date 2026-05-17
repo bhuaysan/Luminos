@@ -8,7 +8,6 @@ Usage:
 """
 
 import argparse
-import sys
 from luminos.core.pipeline import convert_file
 
 

@@ -4,18 +4,19 @@ from __future__ import annotations
 
 import copy
 import os
-from collections import deque
+from collections import namedtuple as _namedtuple
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import Qt, QEvent, QPoint, QSize, QTimer, Signal
+from PySide6.QtCore import Qt, QPoint, QSize, QTimer
 from PySide6.QtGui import (
-    QAction,
     QColor,
+    QFont,
     QIcon,
     QImage,
     QKeySequence,
     QPainter,
+    QPen,
     QPixmap,
     QShortcut,
 )
@@ -24,7 +25,6 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
     QDialog,
-    QDialogButtonBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -33,19 +33,15 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
-    QMenu,
     QMessageBox,
     QPushButton,
     QRadioButton,
     QScrollArea,
-    QSizePolicy,
     QSlider,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
-from luminos.core.pipeline import load_image, process
 from luminos.core.inversion import detect_orange_mask, invert, invert_bw, suggest_auto_levels
 from luminos.core.color import (
     apply_white_balance,
@@ -53,7 +49,6 @@ from luminos.core.color import (
     apply_levels,
     apply_saturation,
     apply_sharpening,
-    rotate_image,
     apply_contrast,
     apply_highlights,
     apply_shadows,
@@ -66,7 +61,6 @@ from luminos.core.color import (
     rgb_multipliers_to_temp_tint,
 )
 from luminos.core.curves import apply_curves_fast
-from luminos.io.export import save_tiff
 
 from luminos.ui.session import (
     _EditSettings,
@@ -78,7 +72,6 @@ from luminos.ui.session import (
     SessionManager,
 )
 from luminos.ui.workers import (
-    _PREVIEW_LONG_EDGE,
     _ImportWorker,
     _FullImageLoader,
     _ExportWorker,
@@ -99,6 +92,7 @@ from luminos.ui.widgets import (
 )
 from luminos.ui.dialogs import _BatchExportDialog, _PreferencesDialog
 from luminos.ui.export_params import processing_params_from_settings
+from luminos.ui.history import _EditHistory
 
 _IMPORT_FILTER = (
     "Images (*.tif *.tiff *.nef *.cr2 *.cr3 *.arw *.dng *.orf *.raf *.rw2)"
@@ -119,43 +113,7 @@ def _fmt_signed(v: int) -> str:
     """Format an int value with a leading +/- sign, returning '0' for zero."""
     return "0" if v == 0 else f"{v:+d}"
 
-
-from collections import namedtuple as _namedtuple
 _SliderDef = _namedtuple("_SliderDef", ("slider", "label", "attr", "fmt"))
-
-
-class _EditHistory:
-    """Manages undo/redo stacks for slider and curve editing state."""
-
-    def __init__(self, maxlen: int = 50) -> None:
-        self.undo: deque[_EditSettings] = deque(maxlen=maxlen)
-        self.redo: deque[_EditSettings] = deque(maxlen=maxlen)
-
-    def push(self, settings: _EditSettings) -> None:
-        self.undo.append(settings)
-        self.redo.clear()
-
-    def undo_step(self, current: _EditSettings) -> _EditSettings | None:
-        if not self.undo:
-            return None
-        self.redo.append(current)
-        return self.undo.pop()
-
-    def redo_step(self, current: _EditSettings) -> _EditSettings | None:
-        if not self.redo:
-            return None
-        self.undo.append(current)
-        return self.redo.pop()
-
-    def clear_all(self) -> None:
-        self.undo.clear()
-        self.redo.clear()
-
-    def has_undo(self) -> bool:
-        return bool(self.undo)
-
-    def has_redo(self) -> bool:
-        return bool(self.redo)
 
 
 def _array_to_pixmap(arr: np.ndarray) -> QPixmap:

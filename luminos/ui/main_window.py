@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 import os
-from collections import namedtuple as _namedtuple
 from pathlib import Path
 
 import numpy as np
@@ -85,6 +84,7 @@ from luminos.ui.comparison import _ComparisonController
 from luminos.ui.export_params import processing_params_from_settings
 from luminos.ui.history import _EditHistory
 from luminos.ui.image_utils import array_to_pixmap, rotate_uint8
+from luminos.ui.slider_registry import build_slider_defs, connect_slider_defs
 
 _IMPORT_FILTER = (
     "Images (*.tif *.tiff *.nef *.cr2 *.cr3 *.arw *.dng *.orf *.raf *.rw2)"
@@ -99,13 +99,6 @@ _EXPORT_FILTERS = (
 )
 
 _ZOOM_STEPS = [10, 15, 25, 33, 50, 67, 75, 100, 125, 150, 200, 300, 400]
-
-
-def _fmt_signed(v: int) -> str:
-    """Format an int value with a leading +/- sign, returning '0' for zero."""
-    return "0" if v == 0 else f"{v:+d}"
-
-_SliderDef = _namedtuple("_SliderDef", ("slider", "label", "attr", "fmt"))
 
 
 # ── Main window ───────────────────────────────────────────────────────────────
@@ -1701,38 +1694,16 @@ class MainWindow(QMainWindow):
 
     def _setup_slider_defs(self) -> None:
         """Build the canonical slider registry and wire up all slider signals."""
-        self._slider_defs: list[_SliderDef] = [
-            _SliderDef(self._exposure_slider,      self._exposure_label,      "exposure",           lambda v: f"{v/10.0:+.1f} EV"),
-            _SliderDef(self._contrast_slider,      self._contrast_label,      "contrast",           _fmt_signed),
-            _SliderDef(self._highlights_slider,    self._highlights_label,    "highlights",         _fmt_signed),
-            _SliderDef(self._shadows_slider,       self._shadows_label,       "shadows",            _fmt_signed),
-            _SliderDef(self._black_slider,         self._black_label,         "black_point",        lambda v: f"{v/100.0:.2f}"),
-            _SliderDef(self._white_slider,         self._white_label,         "white_point",        lambda v: f"{v/100.0:.2f}"),
-            _SliderDef(self._temp_slider,          self._temp_label,          "wb_temp",            lambda v: f"{v} K"),
-            _SliderDef(self._tint_slider,          self._tint_label,          "wb_tint",            _fmt_signed),
-            _SliderDef(self._vibrance_slider,      self._vibrance_label,      "vibrance",           _fmt_signed),
-            _SliderDef(self._sat_slider,           self._sat_label,           "saturation",         lambda v: f"{v/100.0:.2f}×"),
-            _SliderDef(self._sharp_slider,         self._sharp_label,         "sharpening",         str),
-            _SliderDef(self._noise_slider,         self._noise_label,         "noise_reduction",    str),
-            _SliderDef(self._vignette_slider,      self._vignette_label,      "vignette",           _fmt_signed),
-            _SliderDef(self._grain_slider,         self._grain_label,         "grain",              str),
-            _SliderDef(self._angle_slider,         self._angle_label,         "angle",              lambda v: f"{v/10.0:+.1f}°"),
-            _SliderDef(self._st_shadow_hue_slider, self._st_shadow_hue_label, "split_shadow_hue",   lambda v: f"{v}°"),
-            _SliderDef(self._st_shadow_sat_slider, self._st_shadow_sat_label, "split_shadow_sat",   str),
-            _SliderDef(self._st_hi_hue_slider,     self._st_hi_hue_label,     "split_highlight_hue", lambda v: f"{v}°"),
-            _SliderDef(self._st_hi_sat_slider,     self._st_hi_sat_label,     "split_highlight_sat", str),
-            _SliderDef(self._st_balance_slider,    self._st_balance_label,    "split_balance",      _fmt_signed),
-        ]
-        for defn in self._slider_defs:
-            defn.slider.sliderPressed.connect(self._on_any_slider_pressed)
-            defn.slider.sliderReleased.connect(self._on_any_slider_released)
-            defn.slider.about_to_reset.connect(self._push_undo_current)
-            if defn.slider is self._angle_slider:
-                defn.slider.valueChanged.connect(self._on_angle_changed)
-            else:
-                defn.slider.valueChanged.connect(
-                    lambda v, d=defn: (d.label.setText(d.fmt(v)), self._schedule_preview())
-                )
+        self._slider_defs = build_slider_defs(self)
+        connect_slider_defs(
+            self._slider_defs,
+            angle_slider=self._angle_slider,
+            on_pressed=self._on_any_slider_pressed,
+            on_released=self._on_any_slider_released,
+            on_reset=self._push_undo_current,
+            on_angle_changed=self._on_angle_changed,
+            on_regular_changed=self._schedule_preview,
+        )
 
     # ── Profiles ──────────────────────────────────────────────────────────────
 

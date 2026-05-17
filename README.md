@@ -6,6 +6,7 @@
   ![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python&logoColor=white)
   ![PySide6](https://img.shields.io/badge/PySide6-Qt6-41cd52?logo=qt&logoColor=white)
   ![Platform](https://img.shields.io/badge/Platform-Linux-orange?logo=linux&logoColor=white)
+  [![CI](https://github.com/bhuaysan/Luminos/actions/workflows/ci.yml/badge.svg)](https://github.com/bhuaysan/Luminos/actions/workflows/ci.yml)
   ![License](https://img.shields.io/badge/License-MIT-green)
 </div>
 
@@ -117,7 +118,7 @@ git clone https://github.com/example/luminos.git
 cd luminos
 
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -e ".[dev]"
 
 # Optional extras
 .venv/bin/pip install pyvips piexif
@@ -161,6 +162,19 @@ python luminos_cli.py scan.NEF positive.tif --exposure 0.5 --wb 1.1 1.0 0.85
 |---|---|
 | `--exposure STOPS` | Exposure adjustment in EV stops (default: 0.0) |
 | `--wb R G B` | White balance RGB multipliers (default: 1.0 1.0 1.0) |
+
+---
+
+## Development
+
+Run the same checks as CI:
+
+```bash
+.venv/bin/python -m compileall luminos luminos_cli.py luminos_gui.py
+.venv/bin/pytest
+```
+
+The test suite uses synthetic image arrays and temporary files for Core and IO coverage, so it does not require sample RAW/TIFF assets.
 
 ---
 

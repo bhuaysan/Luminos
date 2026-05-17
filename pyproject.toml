@@ -18,6 +18,7 @@ dependencies = [
 [project.optional-dependencies]
 fast = ["pyvips"]
 exif = ["piexif"]
+dev = ["pytest>=8.0"]
 
 [project.scripts]
 luminos = "luminos.app:main"
@@ -25,3 +26,7 @@ luminos = "luminos.app:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["luminos*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

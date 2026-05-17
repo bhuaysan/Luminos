@@ -84,6 +84,7 @@ from luminos.ui.comparison import _ComparisonController
 from luminos.ui.export_params import processing_params_from_settings
 from luminos.ui.history import _EditHistory
 from luminos.ui.image_utils import array_to_pixmap, rotate_uint8
+from luminos.ui.navigator_controller import _NavigatorController
 from luminos.ui.slider_registry import build_slider_defs, connect_slider_defs
 
 _IMPORT_FILTER = (
@@ -193,6 +194,7 @@ class MainWindow(QMainWindow):
         root.addLayout(left_col, stretch=1)
         root.addWidget(self._build_controls())
         self._setup_slider_defs()
+        self._navigator_controller = _NavigatorController(self._navigator, self._scroll)
 
         # ── Crop overlay (child of viewport, covers it entirely) ──────────
         self._crop_overlay = _CropOverlay(self._scroll.viewport())
@@ -2048,50 +2050,21 @@ class MainWindow(QMainWindow):
 
     def _update_navigator(self) -> None:
         """Refresh the navigator thumbnail and viewport rectangle."""
-        if self._processed_pixmap is None:
-            self._navigator.update_pixmap(None)
-            self._navigator.update_rect(None)
-            return
-
-        self._navigator.update_pixmap(self._processed_pixmap)
-
-        if self._zoom_fit_mode:
-            # Entire image is visible — no rectangle needed.
-            self._navigator.update_rect(None)
-            return
-
-        pix = self._processed_pixmap
-        z = self._zoom_pct / 100.0
-        img_w = max(1, round(pix.width() * z))
-        img_h = max(1, round(pix.height() * z))
-
-        vp = self._scroll.viewport().size()
-        hval = self._scroll.horizontalScrollBar().value()
-        vval = self._scroll.verticalScrollBar().value()
-
-        vis_w = min(vp.width(), img_w)
-        vis_h = min(vp.height(), img_h)
-
-        nx = hval / img_w
-        ny = vval / img_h
-        nw = vis_w / img_w
-        nh = vis_h / img_h
-
-        self._navigator.update_rect((nx, ny, nw, nh))
+        self._navigator_controller.update(
+            self._processed_pixmap,
+            zoom_fit_mode=self._zoom_fit_mode,
+            zoom_pct=self._zoom_pct,
+        )
 
     def _on_navigator_pan(self, frac_x: float, frac_y: float) -> None:
         """Pan the main view so that *frac_x/frac_y* (image-space) is centred."""
-        if self._processed_pixmap is None or self._zoom_fit_mode:
-            return
-        pix = self._processed_pixmap
-        z = self._zoom_pct / 100.0
-        img_w = max(1, round(pix.width() * z))
-        img_h = max(1, round(pix.height() * z))
-        vp = self._scroll.viewport().size()
-        hval = max(0, round(frac_x * img_w - vp.width() / 2))
-        vval = max(0, round(frac_y * img_h - vp.height() / 2))
-        self._scroll.horizontalScrollBar().setValue(hval)
-        self._scroll.verticalScrollBar().setValue(vval)
+        self._navigator_controller.pan_to(
+            frac_x,
+            frac_y,
+            self._processed_pixmap,
+            zoom_fit_mode=self._zoom_fit_mode,
+            zoom_pct=self._zoom_pct,
+        )
 
     # ── 90° Rotation ──────────────────────────────────────────────────────────
 

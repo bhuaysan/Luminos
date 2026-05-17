@@ -12,11 +12,12 @@ def load_raw(path: str) -> np.ndarray:
     - disable auto-bright / auto-WB so we get true linear data
     - no_auto_scale is intentionally omitted so rawpy auto-scales the
       sensor output to the full 16-bit range, making the /65535 division correct
-    - output as 16-bit, which we then normalize ourselves
+    - output linear sRGB as 16-bit, which matches the export ICC profile and
+      is then normalized to the internal float32 range
     """
     with rawpy.imread(path) as raw:
         rgb = raw.postprocess(
-            output_color=rawpy.ColorSpace.raw,   # stay in camera colour space
+            output_color=rawpy.ColorSpace.sRGB,  # linear sRGB working space
             output_bps=16,
             no_auto_bright=True,
             use_auto_wb=False,

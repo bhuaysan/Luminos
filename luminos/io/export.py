@@ -89,7 +89,7 @@ def save_tiff(
     icc = icc_profile if icc_profile is not None else _get_srgb_icc_bytes()
 
     try:
-        _save_tiff_pyvips(uint16, path)
+        _save_tiff_pyvips(uint16, path, metadata, icc)
         log.debug("TIFF saved via pyvips: %s", path)
         return path
     except ImportError:
@@ -195,9 +195,29 @@ def save_jpeg(
 # ── Backend implementations ───────────────────────────────────────────────────
 
 
-def _save_tiff_pyvips(uint16: np.ndarray, path: Path) -> None:
+def _save_tiff_pyvips(
+    uint16: np.ndarray,
+    path: Path,
+    metadata: dict | None,
+    icc_profile: bytes | None,
+) -> None:
     import pyvips
-    img = pyvips.Image.new_from_array(uint16)
+
+    h, w, bands = uint16.shape
+    contiguous = np.ascontiguousarray(uint16)
+    img = pyvips.Image.new_from_memory(
+        contiguous.data,
+        w,
+        h,
+        bands,
+        "ushort",
+    )
+    if icc_profile:
+        img.set_type(pyvips.GValue.gblob_type, "icc-profile-data", icc_profile)
+    meta = metadata or {}
+    description = _description_string(meta)
+    if description:
+        img.set("image-description", description)
     img.tiffsave(str(path), compression="none", bigtiff=True)
 
 

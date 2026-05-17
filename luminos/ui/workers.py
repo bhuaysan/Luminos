@@ -232,6 +232,7 @@ class _BatchExportWorker(QThread):
         quality: int,
         params: ProcessingParams,
         masks: dict[str, tuple[float, float, float]],
+        params_by_path: dict[str, ProcessingParams] | None = None,
         crops: dict[str, tuple[float, float, float, float]] | None = None,
         rotations: dict[str, int] | None = None,
         film_types: dict[str, str] | None = None,
@@ -244,6 +245,7 @@ class _BatchExportWorker(QThread):
         self._fmt = fmt
         self._quality = quality
         self._params = params
+        self._params_by_path = params_by_path or {}
         self._masks = masks
         self._crops = crops or {}
         self._rotations = rotations or {}
@@ -268,8 +270,9 @@ class _BatchExportWorker(QThread):
                 if crop is not None:
                     raw = _apply_crop(raw, crop)
                 out_path = Path(self._output_dir) / (Path(path).stem + self._suffix + ext)
+                base_params = self._params_by_path.get(path, self._params)
                 per_image = dataclasses.replace(
-                    self._params,
+                    base_params,
                     mask=self._masks.get(path),
                     film_type=self._film_types.get(path, "c41"),
                     exif_bytes=self._exif_data.get(path),

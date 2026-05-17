@@ -75,6 +75,12 @@ from luminos.ui.widgets import (
 )
 from luminos.ui.dialogs import _PreferencesDialog
 from luminos.ui.comparison import _ComparisonController
+from luminos.ui.crop_state import (
+    apply_crop_selection,
+    apply_rotation_90,
+    reset_crop_to_initial,
+    undo_crop_or_rotation,
+)
 from luminos.ui.export_controller import _ExportController
 from luminos.ui.history import _EditHistory
 from luminos.ui.image_utils import array_to_pixmap, rotate_uint8
@@ -2073,22 +2079,7 @@ class MainWindow(QMainWindow):
         if entry is None:
             return
 
-        # Push to shared undo stack
-        entry.crop_history.append((
-            entry.inverted_preview.copy() if entry.inverted_preview is not None else None,
-            entry.raw_preview.copy() if entry.raw_preview is not None else None,
-            entry.crop_region_norm,
-            entry.rotation_steps,
-        ))
-
-        # Rotate preview arrays
-        entry.inverted_preview = np.rot90(entry.inverted_preview, k=steps)
-        if entry.raw_preview is not None:
-            entry.raw_preview = np.rot90(entry.raw_preview, k=steps)
-
-        # Track cumulative rotation for full-res export
-        entry.rotation_steps = (entry.rotation_steps + steps) % 4
-
+        apply_rotation_90(entry, steps)
         self._inverted_preview = entry.inverted_preview
         self._invalidate_before_pixmap()
         self._crop_sel_norm = None
@@ -2422,50 +2413,15 @@ class MainWindow(QMainWindow):
         if self._crop_sel_norm is None or self._inverted_preview is None:
             return
 
-        x0n, y0n, x1n, y1n = self._crop_sel_norm
-        cx0, cy0 = min(x0n, x1n), min(y0n, y1n)
-        cx1, cy1 = max(x0n, x1n), max(y0n, y1n)
-
-        if (cx1 - cx0) < 0.01 or (cy1 - cy0) < 0.01:
-            self._status.showMessage("Crop: Auswahl zu klein")
-            return
-
         entry = self._entries.get(self._active_path)
         if entry is None:
             return
 
-        # Push current state to undo stack
-        entry.crop_history.append((
-            entry.inverted_preview.copy() if entry.inverted_preview is not None else None,
-            entry.raw_preview.copy() if entry.raw_preview is not None else None,
-            entry.crop_region_norm,
-        ))
-
-        # Compose new crop_region_norm in original-image space
-        old = entry.crop_region_norm
-        if old is None:
-            entry.crop_region_norm = (cx0, cy0, cx1, cy1)
-        else:
-            ox0, oy0, ox1, oy1 = old
-            entry.crop_region_norm = (
-                ox0 + cx0 * (ox1 - ox0),
-                oy0 + cy0 * (oy1 - oy0),
-                ox0 + cx1 * (ox1 - ox0),
-                oy0 + cy1 * (oy1 - oy0),
-            )
-
-        # Crop the preview arrays in-place
-        prev_h, prev_w = entry.inverted_preview.shape[:2]
-        r0, r1 = int(cy0 * prev_h), int(cy1 * prev_h)
-        c0, c1 = int(cx0 * prev_w), int(cx1 * prev_w)
-        entry.inverted_preview = entry.inverted_preview[r0:r1, c0:c1].copy()
-
-        if entry.raw_preview is not None:
-            rp_h, rp_w = entry.raw_preview.shape[:2]
-            entry.raw_preview = entry.raw_preview[
-                int(cy0 * rp_h):int(cy1 * rp_h),
-                int(cx0 * rp_w):int(cx1 * rp_w),
-            ].copy()
+        try:
+            apply_crop_selection(entry, self._crop_sel_norm)
+        except ValueError:
+            self._status.showMessage("Crop: Auswahl zu klein")
+            return
 
         # Update active shortcuts
         self._inverted_preview = entry.inverted_preview
@@ -2492,17 +2448,7 @@ class MainWindow(QMainWindow):
             return
 
         if has_history:
-            # The first entry is the snapshot taken before any crop or rotation.
-            snap = entry.crop_history[0]
-            if len(snap) == 4:
-                inv_snap, raw_snap, crop_snap, rot_snap = snap
-                entry.rotation_steps = rot_snap
-            else:
-                inv_snap, raw_snap, crop_snap = snap
-            entry.inverted_preview = inv_snap
-            entry.raw_preview = raw_snap
-            entry.crop_region_norm = crop_snap
-            entry.crop_history.clear()
+            reset_crop_to_initial(entry)
             self._inverted_preview = entry.inverted_preview
             self._invalidate_before_pixmap()
 
@@ -2540,20 +2486,8 @@ class MainWindow(QMainWindow):
             # _on_angle_changed fires and updates the undo button state; done.
             return
 
-        if not entry.crop_history:
+        if not undo_crop_or_rotation(entry):
             return
-
-        snap = entry.crop_history.pop()
-        # Support both old 3-tuple (crop only) and new 4-tuple (crop+rotation)
-        if len(snap) == 4:
-            inv_snap, raw_snap, crop_snap, rot_snap = snap
-            entry.rotation_steps = rot_snap
-        else:
-            inv_snap, raw_snap, crop_snap = snap
-
-        entry.inverted_preview = inv_snap
-        entry.raw_preview = raw_snap
-        entry.crop_region_norm = crop_snap
 
         self._inverted_preview = entry.inverted_preview
         self._invalidate_before_pixmap()

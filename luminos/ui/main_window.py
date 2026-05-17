@@ -74,6 +74,7 @@ from luminos.ui.widgets import (
     _NavigatorWidget,
 )
 from luminos.ui.dialogs import _PreferencesDialog
+from luminos.ui.activation_controller import _ActivationController
 from luminos.ui.comparison import _ComparisonController
 from luminos.ui.crop_state import (
     apply_crop_selection,
@@ -188,6 +189,7 @@ class MainWindow(QMainWindow):
         root.addLayout(left_col, stretch=1)
         root.addWidget(self._build_controls())
         self._setup_slider_defs()
+        self._activation_controller = _ActivationController(self)
         self._navigator_controller = _NavigatorController(self._navigator, self._scroll)
         self._export_controller = _ExportController(self)
 
@@ -1032,19 +1034,7 @@ class MainWindow(QMainWindow):
             self._start_import(paths)
 
     def _start_import(self, paths: list[str]) -> None:
-        new_paths = [p for p in paths if p not in self._entries]
-        if not new_paths:
-            self._status.showMessage("All selected images are already imported.")
-            return
-        for p in new_paths:
-            self._entries[p] = _ImageEntry(path=p, film_type=self._app_settings.default_film_type)
-        self._status.showMessage(f"Importing {len(new_paths)} image(s)…")
-        worker = _ImportWorker(new_paths, self._app_settings.preview_long_edge)
-        worker.image_ready.connect(self._on_image_ready)
-        worker.error.connect(self._on_import_error)
-        worker.all_done.connect(self._on_import_done)
-        self._import_worker = worker
-        worker.start()
+        self._activation_controller.start_import(paths)
 
     # ── Drag & drop ───────────────────────────────────────────────────────────
 
@@ -1222,27 +1212,8 @@ class MainWindow(QMainWindow):
         # is not GC'd while still running (Qt ABRT: QObject destroyed in wrong
         # thread).  QThread.finished fires on the main thread after run() exits,
         # at which point it is safe to release the reference.
-        if self._full_loader is not None:
-            self._full_loader.requestInterruption()
-            try:
-                self._full_loader.loaded.disconnect(self._on_full_image_loaded)
-                self._full_loader.error.disconnect(self._on_load_error)
-            except RuntimeError:
-                pass  # already disconnected
-            old = self._full_loader
-            self._old_loaders.append(old)
-            old.finished.connect(
-                lambda o=old: self._old_loaders.remove(o)
-                if o in self._old_loaders else None
-            )
-            self._full_loader = None
-
-        self._status.showMessage(f"Loading: {Path(path).name}…")
-        loader = _FullImageLoader(path)
-        loader.loaded.connect(self._on_full_image_loaded)
-        loader.error.connect(self._on_load_error)
-        self._full_loader = loader
-        loader.start()
+        self._activation_controller.park_full_loader()
+        self._activation_controller.start_full_loader(path)
 
     def _on_full_image_loaded(self, path: str, raw: np.ndarray) -> None:
         # Discard result if the user switched to another image in the meantime
@@ -1970,19 +1941,7 @@ class MainWindow(QMainWindow):
 
         if active_removed:
             # Stop any in-flight full-image loader for the removed image.
-            if self._full_loader is not None:
-                try:
-                    self._full_loader.loaded.disconnect(self._on_full_image_loaded)
-                    self._full_loader.error.disconnect(self._on_load_error)
-                except RuntimeError:
-                    pass
-                old = self._full_loader
-                self._old_loaders.append(old)
-                old.finished.connect(
-                    lambda o=old: self._old_loaders.remove(o)
-                    if o in self._old_loaders else None
-                )
-                self._full_loader = None
+            self._activation_controller.park_full_loader()
 
             self._active_path = None  # clear so _activate_path won't short-circuit
 

@@ -9,17 +9,7 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import Qt, QPoint, QSize, QTimer
-from PySide6.QtGui import (
-    QColor,
-    QFont,
-    QIcon,
-    QImage,
-    QKeySequence,
-    QPainter,
-    QPen,
-    QPixmap,
-    QShortcut,
-)
+from PySide6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -91,8 +81,10 @@ from luminos.ui.widgets import (
     _NavigatorWidget,
 )
 from luminos.ui.dialogs import _BatchExportDialog, _PreferencesDialog
+from luminos.ui.comparison import _ComparisonController
 from luminos.ui.export_params import processing_params_from_settings
 from luminos.ui.history import _EditHistory
+from luminos.ui.image_utils import array_to_pixmap, rotate_uint8
 
 _IMPORT_FILTER = (
     "Images (*.tif *.tiff *.nef *.cr2 *.cr3 *.arw *.dng *.orf *.raf *.rw2)"
@@ -115,25 +107,6 @@ def _fmt_signed(v: int) -> str:
 
 _SliderDef = _namedtuple("_SliderDef", ("slider", "label", "attr", "fmt"))
 
-
-def _array_to_pixmap(arr: np.ndarray) -> QPixmap:
-    """Convert a uint8 (H, W, 3) array to QPixmap (main thread only)."""
-    h, w, _ = arr.shape
-    qimg = QImage(arr.tobytes(), w, h, w * 3, QImage.Format.Format_RGB888)
-    return QPixmap.fromImage(qimg)
-
-
-def _rotate_uint8(arr: np.ndarray, angle: float) -> np.ndarray:
-    """Rotate a uint8 (H, W, 3) array by *angle* degrees (positive = CCW, expand)."""
-    from PIL import Image
-    pil = Image.fromarray(arr)
-    rotated = pil.rotate(
-        angle,
-        resample=Image.Resampling.BICUBIC,
-        expand=True,
-        fillcolor=(0, 0, 0),
-    )
-    return np.asarray(rotated)
 
 # ── Main window ───────────────────────────────────────────────────────────────
 
@@ -165,11 +138,7 @@ class MainWindow(QMainWindow):
         # Clipping indicator mode: highlights → red, shadows → blue
         self._clipping_mode: bool = False
 
-        # Before/After comparison state
-        self._before_after: bool = False
-        self._before_pixmap: QPixmap | None = None
-        # Split-view (side-by-side before|after) state
-        self._split_view: bool = False
+        self._comparison: _ComparisonController | None = None
 
         # Zoom state
         # True  → always scale to fit the viewport (default)
@@ -336,8 +305,11 @@ class MainWindow(QMainWindow):
         self._act_batch.setEnabled(v)
 
     def _set_before_enabled(self, v: bool) -> None:
-        self._before_btn.setEnabled(v)
-        self._act_before_after.setEnabled(v)
+        if self._comparison is not None:
+            self._comparison.set_enabled(v)
+        else:
+            self._before_btn.setEnabled(v)
+            self._act_before_after.setEnabled(v)
 
     def _set_save_session_enabled(self, v: bool) -> None:
         self._act_save_session.setEnabled(v)
@@ -495,7 +467,6 @@ class MainWindow(QMainWindow):
         self._before_btn = QPushButton("Vorher")
         self._before_btn.setFixedWidth(60)
         self._before_btn.setCheckable(True)
-        self._set_before_enabled(False)
         self._before_btn.setToolTip("Vorher/Nachher-Vergleich  |  \\")
         self._before_btn.toggled.connect(self._set_before_after)
         zoom_layout.addWidget(self._before_btn)
@@ -507,6 +478,13 @@ class MainWindow(QMainWindow):
         self._split_btn.setToolTip("Vorher/Nachher nebeneinander (Split-Ansicht)")
         self._split_btn.toggled.connect(self._set_split_view)
         zoom_layout.addWidget(self._split_btn)
+        self._comparison = _ComparisonController(
+            self._before_btn,
+            self._split_btn,
+            self._act_before_after,
+            self._fit_pixmap_to_label,
+        )
+        self._set_before_enabled(False)
 
         vbox.addWidget(zoom_bar)
         return container
@@ -1052,9 +1030,7 @@ class MainWindow(QMainWindow):
         sh_mask = arr.max(axis=2) <= 3
         arr[hl_mask] = [255, 0, 0]
         arr[sh_mask] = [0, 0, 255]
-        h, w = arr.shape[:2]
-        qimg = QImage(arr.tobytes(), w, h, w * 3, QImage.Format.Format_RGB888)
-        return QPixmap.fromImage(qimg)
+        return array_to_pixmap(arr)
 
     # ── Import ────────────────────────────────────────────────────────────────
 
@@ -1118,7 +1094,7 @@ class MainWindow(QMainWindow):
         entry.orange_mask = mask
         entry.exif_bytes = exif_bytes
 
-        thumb_pix = _array_to_pixmap(thumb_uint8)
+        thumb_pix = array_to_pixmap(thumb_uint8)
         item = QListWidgetItem(QIcon(thumb_pix), Path(path).name)
         item.setData(Qt.ItemDataRole.UserRole, path)
         item.setToolTip(path)
@@ -1224,19 +1200,7 @@ class MainWindow(QMainWindow):
         self._orange_mask = entry.orange_mask
         self._set_export_enabled(False)
 
-        # Reset before/after and split-view mode on image switch.
-        # Block signals: the toggled() handlers call _fit_pixmap_to_label() /
-        # _update_preview(), which must not fire here before the new image is ready.
-        self._before_after = False
-        self._before_btn.blockSignals(True)
-        self._before_btn.setChecked(False)
-        self._before_btn.blockSignals(False)
-        self._before_btn.setText("Vorher")
-        self._before_pixmap = None
-        self._split_view = False
-        self._split_btn.blockSignals(True)
-        self._split_btn.setChecked(False)
-        self._split_btn.blockSignals(False)
+        self._comparison.reset()
 
         # Clear editing undo/redo history — each image has its own independent history.
         self._history.clear_all()
@@ -1468,12 +1432,10 @@ class MainWindow(QMainWindow):
 
         angle = self._angle()
         if abs(angle) > 0.05:
-            uint8 = _rotate_uint8(uint8, angle)
+            uint8 = rotate_uint8(uint8, angle)
 
         self._display_uint8 = uint8
-        h, w = uint8.shape[:2]
-        qimg = QImage(uint8.tobytes(), w, h, w * 3, QImage.Format.Format_RGB888)
-        self._processed_pixmap = QPixmap.fromImage(qimg)
+        self._processed_pixmap = array_to_pixmap(uint8)
         self._histogram.update_from_uint8(uint8)
         self._fit_pixmap_to_label()
 
@@ -1489,12 +1451,7 @@ class MainWindow(QMainWindow):
             if self._clipping_mode and self._display_uint8 is not None
             else self._processed_pixmap
         )
-        if self._split_view and self._before_pixmap is not None:
-            pix = after_pix
-        elif self._before_after and self._before_pixmap is not None:
-            pix = self._before_pixmap
-        else:
-            pix = after_pix
+        pix = self._comparison.base_pixmap(after_pix)
 
         vp = self._scroll.viewport().size()
 
@@ -1505,8 +1462,7 @@ class MainWindow(QMainWindow):
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
-            if self._split_view and self._before_pixmap is not None:
-                scaled = self._make_split_composite(scaled)
+            scaled = self._comparison.maybe_make_split_composite(scaled)
 
             # Clear any fixed-size constraint left by fixed-zoom mode;
             # setWidgetResizable(True) cannot resize a widget past its fixed bounds.
@@ -1532,8 +1488,7 @@ class MainWindow(QMainWindow):
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
-            if self._split_view and self._before_pixmap is not None:
-                scaled = self._make_split_composite(scaled)
+            scaled = self._comparison.maybe_make_split_composite(scaled)
 
             self._scroll.setWidgetResizable(False)
             self._image_label.setFixedSize(scaled.width(), scaled.height())
@@ -2073,9 +2028,7 @@ class MainWindow(QMainWindow):
                 self._raw_image = None
                 self._inverted_preview = None
                 self._processed_pixmap = None
-                self._before_pixmap = None
-                self._split_view = False
-                self._split_btn.setChecked(False)
+                self._comparison.reset()
                 self._image_label.setPixmap(QPixmap())
                 self._image_label.setText("No image loaded")
                 self._navigator.clear()
@@ -2097,120 +2050,15 @@ class MainWindow(QMainWindow):
 
     def _toggle_before_after(self) -> None:
         """Toggle before/after mode (keyboard shortcut \\)."""
-        if self._before_btn.isEnabled():
-            self._before_btn.setChecked(not self._before_btn.isChecked())
+        self._comparison.toggle_before_after()
 
     def _set_before_after(self, active: bool) -> None:
         """Show the unedited inverted image (before) or the processed result (after)."""
-        self._before_after = active
-        if active and self._inverted_preview is not None:
-            # Build the "before" pixmap from the raw inverted preview on demand.
-            uint8 = (np.clip(self._inverted_preview, 0, 1) * 255).astype(np.uint8)
-            h, w = uint8.shape[:2]
-            qimg = QImage(uint8.tobytes(), w, h, w * 3, QImage.Format.Format_RGB888)
-            self._before_pixmap = QPixmap.fromImage(qimg)
-        if active and self._split_view:
-            # Mutual exclusion: before-only and split cannot both be on.
-            self._split_btn.blockSignals(True)
-            self._split_btn.setChecked(False)
-            self._split_btn.blockSignals(False)
-            self._split_view = False
-        self._before_btn.setText("Nachher" if active else "Vorher")
-        self._act_before_after.setChecked(active)
-        self._fit_pixmap_to_label()
+        self._comparison.set_before_after(active, self._inverted_preview)
 
     def _set_split_view(self, active: bool) -> None:
         """Activate/deactivate the side-by-side split-view comparison."""
-        self._split_view = active
-        if active:
-            # Always rebuild _before_pixmap so it matches the current _inverted_preview
-            # (it may have changed due to crop/rotation/film-type since last activation).
-            if self._inverted_preview is not None:
-                uint8 = (np.clip(self._inverted_preview, 0, 1) * 255).astype(np.uint8)
-                h, w = uint8.shape[:2]
-                qimg = QImage(uint8.tobytes(), w, h, w * 3, QImage.Format.Format_RGB888)
-                self._before_pixmap = QPixmap.fromImage(qimg)
-            # Mutual exclusion: split and before-only cannot both be on.
-            if self._before_after:
-                self._before_btn.blockSignals(True)
-                self._before_btn.setChecked(False)
-                self._before_btn.setText("Vorher")
-                self._before_btn.blockSignals(False)
-                self._before_after = False
-        self._fit_pixmap_to_label()
-
-    def _make_split_composite(self, after_scaled: QPixmap) -> QPixmap:
-        """
-        Build a split-screen composite from *after_scaled* (already scaled to
-        the desired display size) and ``_before_pixmap``.
-
-        Left half: 'before' image; right half: 'after' image.
-        A thin white divider line and text labels are drawn at the centre.
-        """
-        before_pix = self._before_pixmap
-        if before_pix is None:
-            return after_scaled
-
-        w, h = after_scaled.width(), after_scaled.height()
-        # Scale before to fit the same canvas.  KeepAspectRatio is safe here:
-        # both images share the same source dimensions, so they produce identical
-        # scaled sizes in the normal case.  When fine-angle rotation has expanded
-        # _processed_pixmap slightly, KeepAspectRatio avoids stretching the before.
-        before_scaled = before_pix.scaled(
-            w, h,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        # Centre before vertically if it's shorter (rotation-expanded after).
-        before_y = (h - before_scaled.height()) // 2
-
-        composite = QPixmap(w, h)
-        composite.fill(QColor(0, 0, 0))
-        p = QPainter(composite)
-
-        # Draw before on the left half.
-        p.setClipRect(0, 0, w // 2, h)
-        p.drawPixmap(0, before_y, before_scaled)
-
-        # Draw after on the right half.
-        p.setClipRect(w // 2, 0, w - w // 2, h)
-        p.drawPixmap(0, 0, after_scaled)
-
-        p.setClipping(False)
-
-        # Centre divider line.
-        mid = w // 2
-        p.setPen(QPen(QColor(255, 255, 255), 2, Qt.PenStyle.SolidLine))
-        p.drawLine(mid, 0, mid, h)
-
-        # Small labels.
-        font = QFont()
-        font.setPointSize(8)
-        font.setBold(True)
-        p.setFont(font)
-        margin = 6
-        label_h = 18
-        for text, align_right in (("VORHER", False), ("NACHHER", True)):
-            fm = p.fontMetrics()
-            lw = fm.horizontalAdvance(text)
-            if align_right:
-                lx = mid + margin
-            else:
-                lx = mid - margin - lw
-            ly = margin
-            # Shadow
-            p.setPen(QColor(0, 0, 0, 160))
-            p.drawText(lx + 1, ly + 1, lw, label_h,
-                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                       text)
-            # Text
-            p.setPen(QColor(255, 255, 255, 220))
-            p.drawText(lx, ly, lw, label_h,
-                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                       text)
-
-        p.end()
-        return composite
+        self._comparison.set_split_view(active, self._inverted_preview)
 
     # ── Before-pixmap lifecycle ───────────────────────────────────────────────
 
@@ -2223,12 +2071,7 @@ class MainWindow(QMainWindow):
         active, immediately rebuilds it from the new ``_inverted_preview`` so the
         display stays consistent.
         """
-        self._before_pixmap = None
-        if (self._before_after or self._split_view) and self._inverted_preview is not None:
-            uint8 = (np.clip(self._inverted_preview, 0, 1) * 255).astype(np.uint8)
-            h, w = uint8.shape[:2]
-            qimg = QImage(uint8.tobytes(), w, h, w * 3, QImage.Format.Format_RGB888)
-            self._before_pixmap = QPixmap.fromImage(qimg)
+        self._comparison.invalidate_before_pixmap(self._inverted_preview)
 
     # ── Navigator ─────────────────────────────────────────────────────────────
 
